@@ -1,7 +1,6 @@
 import scrapy
 import json
 import logging
-import json
 from bs4 import BeautifulSoup
 import urllib.parse as urlparse
 from urllib.parse import parse_qs
@@ -12,13 +11,13 @@ class SearchSpider(scrapy.Spider):
     name = 'search'
     keyword = ''
     Q = None
+    firstScan = True
 
     def __init__(self, **kwargs):
         self.base_url = 'https://www.mercari.com'
         self.count = 0
         self.page = 1
         self.max_page = 1
-        self.firstScan = True
         self.oldItems = []
         
         super().__init__(**kwargs)
@@ -49,11 +48,52 @@ class SearchSpider(scrapy.Spider):
                     'name': vName,
                     'link': vLink,
                     'price': vPrice,
-                    'image': vPhoto
+                    'image': vPhoto,
+                    'type': 'list'
                 }
-                self.Q.put(json.dumps(newItem))
-            # yield self.mercari_scapy_request()
+                exist = False
+                for oi in self.oldItems:
+                    if oi['link'] == newItem['link']:
+                        exist = True
+                if exist != True:
+                    self.Q.put(json.dumps(newItem))
+                    if self.firstScan != True:
+                        yield scrapy.Request(
+                            vLink,
+                            method="GET",
+                            callback=self.parse_item,
+                            dont_filter = True
+                        )
         self.Q.put('Scrapped')
         self.firstScan = False
+        # yield self.mercari_scapy_request()
+    def parse_item(self, response):
+        try:
+            h_name = '//h1[has-class("item-name")]/text()'
+            name = response.xpath(h_name).get()
+
+            span_price = '//span[has-class("item-price")]/text()'
+            price = response.xpath(span_price).get()
+
+            table_info = '//table[has-class("item-detail-table")]'
+            info = response.xpath(table_info).get()
+            pInfo = BeautifulSoup(info, 'html.parser')
+            trs = pInfo.select('tr')
+            seller = trs[0].select_one('td').select_one('a').get_text()
+            like_count = trs[0].select_one('td').select('.item-user-ratings')[0].select_one('span').get_text()
+            dislike_count = trs[0].select_one('td').select('.item-user-ratings')[1].select_one('span').get_text()
+
+            itemObj = {
+                'link': response.request.url,
+                'name': name,
+                'seller': seller,
+                'price': price,
+                'like_count': like_count,
+                'dislike_count': dislike_count,
+                'type': 'item'
+            }
+            self.Q.put(json.dumps(itemObj))
+        except:
+            print('aaa')
     def close(self, reason):
         self.Q.put('Stop')
